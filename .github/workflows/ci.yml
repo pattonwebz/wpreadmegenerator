@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20.19 is the floor declared in engines: the first 20.x with require(esm).
+        node: ['20.19', '22', '24']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm run test:only
+
+      - name: Type check
+        run: npm run typecheck
+
+  package-budget:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+
+      # Keeps "tiny" true a year from now. Allowances and the reasoning behind
+      # them are in README.md under "Package budget".
+      - name: Assert the package budget
+        run: |
+          set -euo pipefail
+          npm pack --silent >/dev/null
+          TGZ=$(ls ./*.tgz | head -1)
+          BYTES=$(wc -c < "$TGZ")
+          FILES=$(tar tzf "$TGZ" | wc -l)
+          DEPS=$(node -p "Object.keys(require('./package.json').dependencies || {}).length")
+          echo "tarball: $BYTES bytes, files: $FILES, dependencies: $DEPS"
+          test "$BYTES" -le 30720 || { echo "::error::tarball is $BYTES bytes, budget is 30720"; exit 1; }
+          test "$FILES" -le 20 || { echo "::error::$FILES files in the tarball, budget is 20"; exit 1; }
+          test "$DEPS" -eq 0 || { echo "::error::package has runtime dependencies"; exit 1; }
+          rm -f ./*.tgz
